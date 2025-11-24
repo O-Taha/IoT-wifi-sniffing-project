@@ -1,14 +1,20 @@
-# main.py
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 import sqlite3
 from datetime import datetime
-from typing import Any
+from contextlib import asynccontextmanager
 
 DB_PATH = "wifi_scans.db"
 
-app = FastAPI(title="WiFi Scan Collector")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # initialisation de la DB au démarrage
+    init_db()
+    yield
+    # pas de code à l'arrêt
+
+app = FastAPI(title="WiFi Scan Collector", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -45,12 +51,8 @@ def init_db():
     conn.commit()
     conn.close()
 
-@app.on_event("startup")
-async def startup_event():
-    init_db()
-
 # Helper to insert scan + networks
-def store_scan(device_id: str, timestamp_ms: int, groups: Any):
+def store_scan(device_id: str, timestamp_ms: int, groups: any):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute('INSERT INTO scans (device_id, timestamp_ms) VALUES (?, ?)', (device_id, timestamp_ms))
@@ -77,12 +79,12 @@ async def receive_ttn(request: Request):
     """
     Reçoit le JSON envoyé par l'ESP32 (schema approximatif):
     {
-      "device_id": "...",
-      "timestamp_ms": 123456,
-      "groups": [
-         {"ssid": "...", "bestRssi": -40, "items":[{...}, ...]},
-         ...
-      ]
+        "device_id": "...",
+        "timestamp_ms": 123456,
+        "groups": [
+            {"ssid": "...", "bestRssi": -40, "items":[{...}, ...]},
+        ...
+        ]
     }
     """
     try:

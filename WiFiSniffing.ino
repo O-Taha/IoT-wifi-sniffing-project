@@ -1,13 +1,14 @@
 // WiFiSniffing_debug_fixed.ino
 /*
- Mode :
+  Mode :
   - #define DEBUG 1 => envoi HTTP POST local vers /ttn
   - #define DEBUG 0 => envoi via LoRa-E5 (mode actuel)
 */
 
-#define DEBUG 0   // 1 = HTTP local (test), 0 = LoRa
+#define DEBUG 1   // 1 = HTTP local (test), 0 = LoRa
 
 #include <WiFi.h>
+#include "wifi_credentials.h"
 #include <HTTPClient.h>
 #include <vector>
 #include <algorithm>
@@ -21,10 +22,10 @@ HardwareSerial LoRaSerial(2);
 #define SEND_INTERVAL_MS 60000UL
 
 // --- WiFi credentials (à adapter) ---
-const char* ssid = "Galaxy A...";
-const char* password = "xxxxxxx";
+const char* ssid = WIFI_SSID;
+const char* password = WIFI_PASS;
 // Endpoint du serveur (modifier si besoin)
-const char* SERVER_HOST = "http://172.XX.XX.34:8000"; // IP DU PC
+const char* SERVER_HOST = "http://127.0.0.1:8000"; // IP DU PC
 const char* TTN_PATH = "/ttn"; // POST target
 
 unsigned long lastSend = 0;
