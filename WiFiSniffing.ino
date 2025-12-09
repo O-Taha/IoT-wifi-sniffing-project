@@ -12,6 +12,7 @@
 #include <HTTPClient.h>
 #include <vector>
 #include <algorithm>
+#include <ArduinoJson.h>
 
 #define MIN(X, Y) (((X) < (Y)) ? (X) : (Y))
 #define LORAE5TX_RX 16   // ESP32 RX2 <- LoRa TX
@@ -25,7 +26,7 @@ HardwareSerial LoRaSerial(2);
 const char* ssid = WIFI_SSID;
 const char* password = WIFI_PASS;
 // Endpoint du serveur (modifier si besoin)
-const char* SERVER_HOST = "http://127.0.0.1:8000"; // IP DU PC
+const char* SERVER_HOST = "http://10.14.2.136:8000"; // IP DU PC
 const char* TTN_PATH = "/ttn"; // POST target
 
 unsigned long lastSend = 0;
@@ -273,42 +274,34 @@ std::vector<Group> performScanGroupSort() {
 }
 
 // ---------- Build JSON from groupList ----------
+
 String buildJsonFromGroups(const std::vector<Group> &groups) {
-  String json = "{";
-  // device id: MAC
-  String mac = WiFi.macAddress();
-  json += "\"device_id\":\"" + escapeJsonString(mac) + "\"";
+    StaticJsonDocument<4096> doc;
 
-  // timestamp (millis) and optional simple time
-  json += ",\"timestamp_ms\":" + String(millis());
+    doc["device_id"] = WiFi.macAddress();
+    doc["timestamp_ms"] = millis();
 
-  json += ",\"groups\":[";
-  bool firstG = true;
-  for (auto &g : groups) {
-    if (!firstG) json += ",";
-    firstG = false;
-    json += "{";
-    json += "\"ssid\":\"" + escapeJsonString(g.ssid) + "\"";
-    json += ",\"bestRssi\":" + String(g.bestRssi);
-    json += ",\"items\":[";
-    bool firstI = true;
-    for (auto &it : g.items) {
-      if (!firstI) json += ",";
-      firstI = false;
-      json += "{";
-      json += "\"ssid\":\"" + escapeJsonString(it.ssid) + "\"";
-      json += ",\"bssid\":\"" + escapeJsonString(it.bssid) + "\"";
-      json += ",\"rssi\":" + String(it.rssi);
-      json += ",\"channel\":" + String(it.channel);
-      json += ",\"enc\":\"" + escapeJsonString(it.enc) + "\"";
-      json += "}";
+    JsonArray arr = doc.createNestedArray("groups");
+
+    for (auto &g : groups) {
+        JsonObject group = arr.createNestedObject();
+        group["ssid"] = g.ssid;
+        group["bestRssi"] = g.bestRssi;
+
+        JsonArray items = group.createNestedArray("items");
+        for (auto &it : g.items) {
+            JsonObject obj = items.createNestedObject();
+            obj["ssid"] = it.ssid;
+            obj["bssid"] = it.bssid;
+            obj["rssi"] = it.rssi;
+            obj["channel"] = it.channel;
+            obj["enc"] = it.enc;
+        }
     }
-    json += "]";
-    json += "}";
-  }
-  json += "]";
-  json += "}";
-  return json;
+
+    String out;
+    serializeJson(doc, out);
+    return out;
 }
 
 // ---------- HTTP POST send ----------
@@ -317,30 +310,42 @@ bool sendHTTPPost(const String &url, const String &payload) {
   http.begin(url);
   http.addHeader("Content-Type", "application/json");
   int httpResponseCode = http.POST(payload);
-  if (httpResponseCode > 0) {
-    String resp = http.getString();
-    Serial.printf("[HTTP] code=%d resp=%s\n", httpResponseCode, resp.c_str());
-    http.end();
-    return (httpResponseCode >= 200 && httpResponseCode < 300);
+  Serial.println("HTTP status : " + String(httpResponseCode));
+  String response = http.getString();
+  Serial.println("Response : " + response);
+
+  bool success = false;
+  if (httpResponseCode >= 200 && httpResponseCode < 300) {
+    success = true;
   } else {
-    Serial.printf("[HTTP] POST failed, error: %s\n", http.errorToString(httpResponseCode).c_str());
-    http.end();
-    return false;
+    Serial.printf("[HTTP] POST failed: %s\n",
+                  http.errorToString(httpResponseCode).c_str());
   }
+  http.end();
+  return success;
 }
 
 void sendScanOverHttp(const std::vector<Group> &groups) {
   String json = buildJsonFromGroups(groups);
   String url = String(SERVER_HOST) + String(TTN_PATH);
+
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[WIFI] Reconnecting...");
+    WiFi.reconnect();
+    unsigned long t0 = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - t0 < 5000) {
+      delay(200);
+    }
+  }
+
   Serial.println("[HTTP] Sending JSON to " + url);
   Serial.println(json);
+
   bool ok = sendHTTPPost(url, json);
-  if (!ok) {
-    Serial.println("[HTTP] Send failed");
-  } else {
-    Serial.println("[HTTP] Send OK");
-  }
+  if (ok) Serial.println("[HTTP] Send OK");
+  else   Serial.println("[HTTP] Send FAILED");
 }
+
 
 void setup() {
   Serial.begin(115200);
