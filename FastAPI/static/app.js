@@ -1,60 +1,109 @@
-async function fetchScans() {
-    let res = await fetch("/wifi_scans?limit=50");
-    let json = await res.json();
+let scans = {}; // scan_id => networks[]
+let activeScanId = null;
 
-    const root = document.getElementById("scans");
-    root.innerHTML = "";
-
-    for (let scan of json.data) {
-        const div = document.createElement("div");
-        div.className = "scan-card";
-
-        div.innerHTML = `
-            <div class="scan-header">
-                Scan #${scan.scan_id} – ${scan.device_id}
-                <br><small>${scan.created_at}</small>
-            </div>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Group</th>
-                        <th>SSID</th>
-                        <th>BSSID</th>
-                        <th>RSSI</th>
-                        <th>CH</th>
-                        <th>Enc</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${scan.networks.map(n => `
-                        <tr>
-                            <td>${n.group_ssid}</td>
-                            <td>${n.ssid}</td>
-                            <td>${n.bssid}</td>
-                            <td>${formatRssi(n.rssi)}</td>
-                            <td>${n.channel}</td>
-                            <td>${n.encryption}</td>
-                        </tr>
-                    `).join("")}
-                </tbody>
-            </table>
-        `;
-
-        root.appendChild(div);
+// Récupère les données du backend
+async function fetchData() {
+    try {
+        const res = await fetch("/wifi_scans?limit=50");
+        if (!res.ok) {
+            throw new Error(`Erreur HTTP : ${res.status}`);
+        }
+        const jsonData = await res.json(); // Récupère l'objet JSON complet
+        updateScans(jsonData.data); // Accède à la propriété `data` de l'objet JSON
+    } catch (error) {
+        console.error("Erreur lors de la récupération des données :", error);
     }
 }
 
-function formatRssi(rssi) {
-    let cls = "rssi-veryweak";
-    if (rssi > -60)      cls = "rssi-strong";
-    else if (rssi > -70) cls = "rssi-medium";
-    else if (rssi > -80) cls = "rssi-weak";
 
-    return `<span class="badge ${cls}">${rssi} dBm</span>`;
+function updateScans(data) {
+    for (const scan of data) {
+        scans[scan.scan_id] = scan.networks;
+    }
+    renderTabs();
+    if (!activeScanId) {
+        activeScanId = Object.keys(scans)[0];
+    }
+    renderActiveTab();
 }
 
-fetchScans();
+function renderTabs() {
+    const tabsDiv = document.getElementById("tabs");
+    tabsDiv.innerHTML = "";
 
-// refresh every 10 sec
-setInterval(fetchScans, 10000);
+    const scanIds = Object.keys(scans).sort((a, b) => a - b);
 
+    scanIds.forEach(id => {
+        const tab = document.createElement("div");
+        tab.className = "tab" + (id == activeScanId ? " active" : "");
+        tab.textContent = "Scan " + id;
+        tab.onclick = () => {
+            activeScanId = id;
+            renderTabs();
+            renderActiveTab();
+        };
+        tabsDiv.appendChild(tab);
+    });
+}
+
+function renderActiveTab() {
+    const container = document.getElementById("tab-content");
+    container.innerHTML = "";
+
+    const networks = scans[activeScanId] || [];
+
+    // Grouping by group_ssid
+    const groups = {};
+    for (const net of networks) {
+        if (!groups[net.group_ssid]) groups[net.group_ssid] = [];
+        groups[net.group_ssid].push(net);
+    }
+
+    const table = document.createElement("table");
+    table.border = "1";
+    table.style.width = "100%";
+    table.innerHTML = `
+        <tr>
+            <th>Group</th>
+            <th>SSID</th>
+            <th>BSSID</th>
+            <th>Channel</th>
+            <th>RSSI</th>
+        </tr>
+    `;
+
+    for (const group in groups) {
+        // N'afficher un groupe QUE s'il a plusieurs SSID
+        if (groups[group].length <= 1) continue;
+
+        const items = groups[group];
+
+        // Ligne de groupe
+        const groupRow = document.createElement("tr");
+        groupRow.className = "group-row";
+        groupRow.innerHTML = `
+            <td colspan="5">${group}</td>
+        `;
+        table.appendChild(groupRow);
+
+        // Lignes enfants
+        items.forEach(net => {
+            const row = document.createElement("tr");
+            row.className = "child-row";
+            row.innerHTML = `
+                <td></td>
+                <td>${net.ssid}</td>
+                <td>${net.bssid}</td>
+                <td>${net.channel}</td>
+                <td>${net.rssi}</td>
+            `;
+            table.appendChild(row);
+        });
+    }
+
+    container.appendChild(table);
+}
+
+// Rafraîchissement périodique
+setInterval(fetchData, 2000);
+fetchData();

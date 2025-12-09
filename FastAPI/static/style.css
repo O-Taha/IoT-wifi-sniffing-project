@@ -49,3 +49,35 @@ th {
 .rssi-weak     { background: #e67e22; }
 .rssi-veryweak { background: #e74c3c; }
 
+/* Onglets */
+#tabs {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.tab {
+    padding: 6px 12px;
+    background: #ddd;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.tab.active {
+    background: #1a73e8;
+    color: white;
+}
+
+/* Arborescence */
+.group-row {
+    background: #f5f5f5;
+    font-weight: bold;
+}
+
+.child-row td {
+    padding-left: 30px;
+}
+
+.hidden {
+    display: none;
+}
