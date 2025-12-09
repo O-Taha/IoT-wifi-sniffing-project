@@ -1,9 +1,10 @@
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import sqlite3
 from datetime import datetime
 from contextlib import asynccontextmanager
+from fastapi.staticfiles import StaticFiles
 
 DB_PATH = "wifi_scans.db"
 
@@ -15,6 +16,7 @@ async def lifespan(app: FastAPI):
     # pas de code à l'arrêt
 
 app = FastAPI(title="WiFi Scan Collector", lifespan=lifespan)
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 app.add_middleware(
     CORSMiddleware,
@@ -158,6 +160,11 @@ async def wifi_scan_page(limit: int = 50):
     conn.close()
     html += "</body></html>"
     return HTMLResponse(content=html)
+
+@app.get("/", response_class=HTMLResponse)
+async def root():
+    return FileResponse("static/index.html")
+
 
 if __name__ == "__main__":
     import uvicorn

@@ -1,0 +1,51 @@
+body {
+    font-family: Arial, sans-serif;
+    margin: 20px;
+    background: #f3f3f3;
+}
+
+h1 {
+    text-align: center;
+}
+
+.scan-card {
+    background: white;
+    padding: 15px;
+    margin-bottom: 20px;
+    border-radius: 8px;
+    box-shadow: 0 3px 6px rgba(0,0,0,0.15);
+}
+
+.scan-header {
+    font-weight: bold;
+    margin-bottom: 10px;
+    font-size: 18px;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 5px;
+}
+
+th, td {
+    padding: 6px 8px;
+    border: 1px solid #ddd;
+}
+
+th {
+    background: #eee;
+}
+
+.badge {
+    padding: 3px 8px;
+    border-radius: 6px;
+    color: white;
+    font-weight: bold;
+}
+
+.rssi-strong   { background: #2ecc71; }
+.rssi-medium   { background: #f1c40f; }
+.rssi-weak     { background: #e67e22; }
+.rssi-veryweak { background: #e74c3c; }
+
