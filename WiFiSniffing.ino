@@ -6,6 +6,7 @@
 */
 
 #define DEBUG 1   // 1 = HTTP local (test), 0 = LoRa
+#define SCAN_MODE 1  // 0 pour WiFi Scan, 1 pour Access Point DB Scan
 
 #include <WiFi.h>
 #include "wifi_credentials.h"
@@ -325,6 +326,8 @@ bool sendHTTPPost(const String &url, const String &payload) {
   return success;
 }
 
+#if SCAN_MODE == 0
+// Mode WiFi Scan : Envoie les scans complets au serveur
 void sendScanOverHttp(const std::vector<Group> &groups) {
   String json = buildJsonFromGroups(groups);
   String url = String(SERVER_HOST) + String(TTN_PATH);
@@ -346,6 +349,35 @@ void sendScanOverHttp(const std::vector<Group> &groups) {
   else   Serial.println("[HTTP] Send FAILED");
 }
 
+#elif SCAN_MODE == 1
+// Mode Access Point DB Scan : Met à jour les points d'accès dans la base
+void sendScanOverHttp(const std::vector<Group> &groups) {
+  for (auto &g : groups) {
+    for (auto &it : g.items) {
+      String url = String(SERVER_HOST) + "/update_access_point";
+      StaticJsonDocument<256> doc;
+      doc["bssid"] = it.bssid;
+      doc["rssi"] = it.rssi;
+      doc["channel"] = it.channel;
+      doc["encryption"] = it.enc;
+
+      String payload;
+      serializeJson(doc, payload);
+
+      bool ok = sendHTTPPost(url, payload);
+
+      if (ok) {
+        Serial.printf("[HTTP] Mise à jour réussie pour %s\n", it.bssid.c_str());
+      } else {
+        Serial.printf("[HTTP] Échec de la mise à jour pour %s\n", it.bssid.c_str());
+      }
+      delay(500); // Délai pour éviter de saturer le serveur
+    }
+  }
+}
+se
+#error "SCAN_MODE doit être défini à 0 (WiFi Scan) ou 1 (Access Point DB Scan)"
+#endif
 
 void setup() {
   Serial.begin(115200);

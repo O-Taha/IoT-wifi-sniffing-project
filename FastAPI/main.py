@@ -50,6 +50,20 @@ def init_db():
             FOREIGN KEY(scan_id) REFERENCES scans(id)
         )
     ''')
+    # Table pour la base de données des points d'accès
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS access_points (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bssid TEXT NOT NULL UNIQUE,
+            ssid TEXT,
+            latitude REAL NOT NULL,
+            longitude REAL NOT NULL,
+            last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
+            rssi INTEGER,
+            channel INTEGER,
+            encryption TEXT
+        )
+    ''')
     conn.commit()
     conn.close()
 
@@ -161,10 +175,92 @@ async def wifi_scan_page(limit: int = 50):
     html += "</body></html>"
     return HTMLResponse(content=html)
 
+@app.post("/access_points")
+async def add_access_point(data: dict):
+    """
+    Endpoint pour que le téléphone enregistre un point d'accès avec ses coordonnées GPS.
+    Exemple de payload :
+    {
+        "bssid": "A1:B2:C3:D4:E5:F6",
+        "ssid": "MonReseau",
+        "latitude": 48.8566,
+        "longitude": 2.3522
+    }
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''
+        INSERT OR REPLACE INTO access_points (bssid, ssid, latitude, longitude, last_seen)
+        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ''', (
+        data['bssid'],
+        data.get('ssid', ''),
+        data['latitude'],
+        data['longitude']
+    ))
+    conn.commit()
+    conn.close()
+    return {"status": "success", "bssid": data['bssid']}
+
+@app.post("/update_access_point")
+async def update_access_point(data: dict):
+    """
+    Endpoint pour que l'ESP32 met à jour les infos WiFi (RSSI, channel, etc.) d'un point d'accès existant.
+    Exemple de payload :
+    {
+        "bssid": "A1:B2:C3:D4:E5:F6",
+        "rssi": -65,
+        "channel": 6,
+        "encryption": "WPA2-PSK"
+    }
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''
+        UPDATE access_points
+        SET rssi = ?, channel = ?, encryption = ?, last_seen = CURRENT_TIMESTAMP
+        WHERE bssid = ?
+    ''', (
+        data['rssi'],
+        data['channel'],
+        data['encryption'],
+        data['bssid']
+    ))
+    conn.commit()
+    conn.close()
+    return {"status": "success", "bssid": data['bssid']}
+
+@app.get("/access_points")
+async def get_access_points():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('SELECT bssid, ssid, latitude, longitude, rssi, channel, encryption FROM access_points')
+    aps = c.fetchall()
+    conn.close()
+    result = []
+    for ap in aps:
+        result.append({
+            "bssid": ap[0],
+            "ssid": ap[1],
+            "latitude": ap[2],
+            "longitude": ap[3],
+            "rssi": ap[4],
+            "channel": ap[5],
+            "encryption": ap[6]
+        })
+    return {"data": result}
+
+@app.get("/download_access_points")
+async def download_access_points(): 
+    #curl -o access_points.db http://<IP_DU_SERVEUR>:8000/download_access_points
+    """
+    Endpoint pour télécharger la base de données access_points.db.
+    """
+    return FileResponse(DB_PATH, filename="access_points.db")
+
 @app.get("/", response_class=HTMLResponse)
 async def root():
     return FileResponse("static/index.html")
-
 
 if __name__ == "__main__":
     import uvicorn
