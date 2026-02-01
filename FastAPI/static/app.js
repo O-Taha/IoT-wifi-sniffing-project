@@ -1,60 +1,34 @@
-async function fetchScans() {
-    let res = await fetch("/wifi_scans?limit=50");
-    let json = await res.json();
+const apsDiv = document.getElementById("aps");
+const mapDiv = document.getElementById("map");
 
-    const root = document.getElementById("scans");
-    root.innerHTML = "";
+apsDiv.innerHTML = "<h3>Access Points détectés</h3>";
 
-    for (let scan of json.data) {
-        const div = document.createElement("div");
-        div.className = "scan-card";
-
-        div.innerHTML = `
-            <div class="scan-header">
-                Scan #${scan.scan_id} – ${scan.device_id}
-                <br><small>${scan.created_at}</small>
+if (!APS || APS.length === 0 || !POSITION) {
+    mapDiv.innerHTML = "<p>Aucune position disponible</p>";
+    apsDiv.innerHTML += "<p>Aucun AP détecté</p>";
+} else {
+    APS.forEach(ap => {
+        apsDiv.innerHTML += `
+            <div>
+                <strong>${ap[0]}</strong><br>
+                RSSI : ${ap[1]} dBm
+                <hr>
             </div>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Group</th>
-                        <th>SSID</th>
-                        <th>BSSID</th>
-                        <th>RSSI</th>
-                        <th>CH</th>
-                        <th>Enc</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${scan.networks.map(n => `
-                        <tr>
-                            <td>${n.group_ssid}</td>
-                            <td>${n.ssid}</td>
-                            <td>${n.bssid}</td>
-                            <td>${formatRssi(n.rssi)}</td>
-                            <td>${n.channel}</td>
-                            <td>${n.encryption}</td>
-                        </tr>
-                    `).join("")}
-                </tbody>
-            </table>
         `;
+    });
 
-        root.appendChild(div);
-    }
+    const map = L.map("map").setView(
+        [POSITION.latitude, POSITION.longitude],
+        18
+    );
+
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19
+    }).addTo(map);
+
+    L.marker([POSITION.latitude, POSITION.longitude])
+        .addTo(map)
+        .bindPopup("Position estimée")
+        .openPopup();
+        
 }
-
-function formatRssi(rssi) {
-    let cls = "rssi-veryweak";
-    if (rssi > -60)      cls = "rssi-strong";
-    else if (rssi > -70) cls = "rssi-medium";
-    else if (rssi > -80) cls = "rssi-weak";
-
-    return `<span class="badge ${cls}">${rssi} dBm</span>`;
-}
-
-fetchScans();
-
-// refresh every 10 sec
-setInterval(fetchScans, 10000);
-

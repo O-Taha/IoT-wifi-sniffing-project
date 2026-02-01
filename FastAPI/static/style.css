@@ -8,44 +8,60 @@ h1 {
     text-align: center;
 }
 
-.scan-card {
-    background: white;
-    padding: 15px;
-    margin-bottom: 20px;
+#layout {
+    display: flex;
+    gap: 20px;
+}
+
+#map {
+    width: 60%;
+    height: 500px;
     border-radius: 8px;
-    box-shadow: 0 3px 6px rgba(0,0,0,0.15);
 }
 
-.scan-header {
-    font-weight: bold;
+#aps {
+    width: 40%;
+    background: white;
+    padding: 10px;
+    border-radius: 8px;
+    overflow-y: auto;
+    max-height: 500px;
+}
+
+#aps h3 {
+    margin-top: 0;
+}
+
+.ap-item {
     margin-bottom: 10px;
-    font-size: 18px;
+    font-size: 14px;
 }
 
-table {
-    width: 100%;
+.ap-item hr {
+    border: none;
+    border-top: 1px solid #ddd;
+}
+
+#aps {
+    margin-top: 20px;
+}
+
+#aps table {
     border-collapse: collapse;
-    margin-top: 5px;
+    width: 100%;
 }
 
-th, td {
-    padding: 6px 8px;
-    border: 1px solid #ddd;
+#aps th, #aps td {
+    border: 1px solid #ccc;
+    padding: 6px 10px;
+    text-align: left;
 }
 
-th {
-    background: #eee;
+#aps th {
+    background-color: #f0f0f0;
 }
 
-.badge {
-    padding: 3px 8px;
-    border-radius: 6px;
-    color: white;
-    font-weight: bold;
+#aps tr:nth-child(even) {
+    background-color: #fafafa;
 }
-
-.rssi-strong   { background: #2ecc71; }
-.rssi-medium   { background: #f1c40f; }
-.rssi-weak     { background: #e67e22; }
-.rssi-veryweak { background: #e74c3c; }
 

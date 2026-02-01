@@ -5,6 +5,89 @@ import sqlite3
 from datetime import datetime
 from contextlib import asynccontextmanager
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+import json
+import math
+from fastapi.templating import Jinja2Templates
+templates = Jinja2Templates(directory="WiFiSniffing/FastAPI/templates")
+
+def distance_m(lat1, lon1, lat2, lon2):
+    R = 6371000  # rayon Terre en mètres
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+
+    a = math.sin(dphi / 2)**2 + \
+        math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2)**2
+    return 2 * R * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+def compute_position_from_last_scan():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+
+    # Dernier scan reçu
+    c.execute("""
+        SELECT id FROM scans
+        ORDER BY created_at DESC
+        LIMIT 1
+    """)
+    row = c.fetchone()
+    if not row:
+        conn.close()
+        return None, []
+
+    scan_id = row[0]
+
+    c.execute("""
+        SELECT bssid, rssi
+        FROM networks
+        WHERE scan_id = ?
+    """, (scan_id,))
+    detected = c.fetchall()
+
+    if not detected:
+        conn.close()
+        return None, []
+
+    scan_dict = {b: r for b, r in detected}
+
+    # Tous les fingerprints
+    c.execute("""
+        SELECT bssid_list, rssi_list, latitude, longitude
+        FROM access_points
+    """)
+    rows = c.fetchall()
+    conn.close()
+
+    best_score = float("inf")
+    best_pos = None
+
+    for bssid_json, rssi_json, lat, lon in rows:
+        bssids = json.loads(bssid_json or "[]")
+        rssis = json.loads(rssi_json or "[]")
+        fp = dict(zip(bssids, rssis))
+
+        score = 0
+        for b, r in scan_dict.items():
+            score += abs(r - fp.get(b, -100))
+
+        if score < best_score:
+            best_score = score
+            best_pos = {"latitude": lat, "longitude": lon}
+
+    return best_pos, detected
+
+
+""" access_points.db-related classes (to create my own DB)"""
+class AccessPointCreate(BaseModel):
+    latitude: float
+    longitude: float
+
+class AccessPointUpdate(BaseModel):
+    bssid_list: list[str]
+    rssi_list: list[int]
+
 
 DB_PATH = "wifi_scans.db"
 
@@ -16,7 +99,7 @@ async def lifespan(app: FastAPI):
     # pas de code à l'arrêt
 
 app = FastAPI(title="WiFi Scan Collector", lifespan=lifespan)
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/static", StaticFiles(directory="WiFiSniffing/FastAPI/static"), name="static")
 
 app.add_middleware(
     CORSMiddleware,
@@ -54,14 +137,11 @@ def init_db():
     c.execute('''
         CREATE TABLE IF NOT EXISTS access_points (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            bssid TEXT NOT NULL UNIQUE,
-            ssid TEXT,
+            bssid_list TEXT,
+            rssi_list TEXT,
             latitude REAL NOT NULL,
             longitude REAL NOT NULL,
-            last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
-            rssi INTEGER,
-            channel INTEGER,
-            encryption TEXT
+            last_seen DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     ''')
     conn.commit()
@@ -176,91 +256,184 @@ async def wifi_scan_page(limit: int = 50):
     return HTMLResponse(content=html)
 
 @app.post("/access_points")
-async def add_access_point(data: dict):
-    """
-    Endpoint pour que le téléphone enregistre un point d'accès avec ses coordonnées GPS.
-    Exemple de payload :
-    {
-        "bssid": "A1:B2:C3:D4:E5:F6",
-        "ssid": "MonReseau",
-        "latitude": 48.8566,
-        "longitude": 2.3522
-    }
-    """
+async def add_access_point(data: AccessPointCreate):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute('''
-        INSERT OR REPLACE INTO access_points (bssid, ssid, latitude, longitude, last_seen)
-        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-    ''', (
-        data['bssid'],
-        data.get('ssid', ''),
-        data['latitude'],
-        data['longitude']
-    ))
+
+    c.execute("""
+        SELECT latitude, longitude
+        FROM access_points
+        ORDER BY last_seen DESC
+        LIMIT 1
+    """)
+    last = c.fetchone()
+
+    if last:
+        dist = distance_m(last[0], last[1], data.latitude, data.longitude)
+        if dist < 5:
+            conn.close()
+            return {
+                "status": "ignored",
+                "reason": f"Déplacement insuffisant ({dist:.2f} m)"
+            }
+
+    c.execute("""
+        INSERT INTO access_points (latitude, longitude)
+        VALUES (?, ?)
+    """, (data.latitude, data.longitude))
+
     conn.commit()
     conn.close()
-    return {"status": "success", "bssid": data['bssid']}
+    return {"status": "success"}
+
+
 
 @app.post("/update_access_point")
-async def update_access_point(data: dict):
-    """
-    Endpoint pour que l'ESP32 met à jour les infos WiFi (RSSI, channel, etc.) d'un point d'accès existant.
-    Exemple de payload :
-    {
-        "bssid": "A1:B2:C3:D4:E5:F6",
-        "rssi": -65,
-        "channel": 6,
-        "encryption": "WPA2-PSK"
-    }
-    """
+async def update_access_point(data: AccessPointUpdate):
+    if len(data.bssid_list) != len(data.rssi_list):
+        raise HTTPException(400, "bssid_list and rssi_list must have same length")
+
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute('''
+
+    c.execute("""
         UPDATE access_points
-        SET rssi = ?, channel = ?, encryption = ?, last_seen = CURRENT_TIMESTAMP
-        WHERE bssid = ?
-    ''', (
-        data['rssi'],
-        data['channel'],
-        data['encryption'],
-        data['bssid']
+        SET bssid_list = ?, rssi_list = ?, last_seen = CURRENT_TIMESTAMP
+        WHERE id = (
+            SELECT id FROM access_points
+            ORDER BY last_seen DESC
+            LIMIT 1
+        )
+    """, (
+        json.dumps(data.bssid_list),
+        json.dumps(data.rssi_list)
     ))
+
+    if c.rowcount == 0:
+        conn.close()
+        raise HTTPException(404, "No access point to update")
+
     conn.commit()
     conn.close()
-    return {"status": "success", "bssid": data['bssid']}
+    return {"status": "success"}
+
 
 @app.get("/access_points")
 async def get_access_points():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute('SELECT bssid, ssid, latitude, longitude, rssi, channel, encryption FROM access_points')
-    aps = c.fetchall()
+
+    # 1️⃣ Nettoyage des entrées invalides
+    c.execute("""
+        DELETE FROM access_points
+        WHERE latitude IS NOT NULL
+        AND longitude IS NOT NULL
+        AND (
+                bssid_list IS NULL
+            OR rssi_list IS NULL
+            OR bssid_list = '[]'
+            OR rssi_list = '[]'
+        )
+    """)
+    conn.commit()
+
+    # 2️⃣ Lecture
+    c.execute("""
+        SELECT id, bssid_list, rssi_list, latitude, longitude, last_seen
+        FROM access_points
+        ORDER BY last_seen DESC
+    """)
+    rows = c.fetchall()
     conn.close()
-    result = []
-    for ap in aps:
-        result.append({
-            "bssid": ap[0],
-            "ssid": ap[1],
-            "latitude": ap[2],
-            "longitude": ap[3],
-            "rssi": ap[4],
-            "channel": ap[5],
-            "encryption": ap[6]
-        })
-    return {"data": result}
+
+    # 3️⃣ Aplatissement
+    flat = []
+
+    for row in rows:
+        ap_id, bssid_json, rssi_json, lat, lon, last_seen = row
+
+        bssids = json.loads(bssid_json) if bssid_json else []
+        rssis = json.loads(rssi_json) if rssi_json else []
+
+        for bssid, rssi in zip(bssids, rssis):
+            flat.append({
+                "access_point_id": ap_id,
+                "bssid": bssid,
+                "rssi": rssi,
+                "latitude": float(lat),
+                "longitude": float(lon),
+                "last_seen": last_seen
+            })
+
+    # 4️⃣ Dé-doublonnage spatial
+    deduped = []
+
+    for ap in flat:
+        found = False
+        for kept in deduped:
+            if ap["bssid"] == kept["bssid"]:
+
+                # Cas 1 : coordonnées strictement identiques
+                if ap["latitude"] == kept["latitude"] and ap["longitude"] == kept["longitude"]:
+                    if ap["last_seen"] > kept["last_seen"]:
+                        kept.update(ap)
+                    found = True
+                    break
+
+                # Cas 2 : proximité GPS
+                d = distance_m(
+                    ap["latitude"], ap["longitude"],
+                    kept["latitude"], kept["longitude"]
+                )
+                print(f"d={d}\nlatitude={ap['latitude']}, longitude={ap['longitude']}, kept_latitude={kept['latitude']}, kept_longitude={kept['longitude']}")
+                if d < 50:
+                    if ap["last_seen"] > kept["last_seen"]:
+                        kept.update(ap)
+                    found = True
+                    break
+
+        if not found:
+            deduped.append(ap)
+
+    return {"data": deduped}
+
+@app.get("/reset_access_points")
+async def reset_access_points():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM access_points")
+    c.execute("DELETE FROM sqlite_sequence WHERE name='access_points'")
+    c.execute("SELECT COUNT(*) FROM access_points")
+    print("NB ROWS:", c.fetchone()[0])
+    conn.commit()
+    conn.close()
+    return {"status": "reset done"}
+
 
 @app.get("/download_access_points")
-async def download_access_points(): 
-    #curl -o access_points.db http://<IP_DU_SERVEUR>:8000/download_access_points
+async def download_access_points():
     """
-    Endpoint pour télécharger la base de données access_points.db.
+    Télécharger la base access_points.db
     """
-    return FileResponse(DB_PATH, filename="access_points.db")
+    return FileResponse(
+        path=DB_PATH,
+        filename="access_points.db",
+        media_type="application/octet-stream"
+    )
 
 @app.get("/", response_class=HTMLResponse)
-async def root():
-    return FileResponse("static/index.html")
+async def root(request: Request):
+    position, aps = compute_position_from_last_scan()
+
+    return templates.TemplateResponse(
+        "index.html",
+        {
+            "request": request,
+            "position": position,
+            "aps": aps
+        }
+    )
+
 
 if __name__ == "__main__":
     import uvicorn

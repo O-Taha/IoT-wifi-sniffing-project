@@ -1,12 +1,16 @@
 // WiFiSniffing_debug_fixed.ino
 /*
+  Process :
+    Connect to local network (eg.: phone)
+    Run FastAPI
+    Update SERVER_HOST with PC IPv4
   Mode :
   - #define DEBUG 1 => envoi HTTP POST local vers /ttn
-  - #define DEBUG 0 => envoi via LoRa-E5 (mode actuel)
+  - #define DEBUG 0 => envoi via LoRa-E5
 */
 
 #define DEBUG 1   // 1 = HTTP local (test), 0 = LoRa
-#define SCAN_MODE 1  // 0 pour WiFi Scan, 1 pour Access Point DB Scan
+#define SCAN_MODE 0  // 0 pour WiFi Scan, 1 pour Access Point DB Scan
 
 #include <WiFi.h>
 #include "wifi_credentials.h"
@@ -21,13 +25,13 @@
 HardwareSerial LoRaSerial(2);
 
 // Ajuster ici si tu veux un envoi toutes les 60s en mode DEBUG (test)
-#define SEND_INTERVAL_MS 60000UL
+#define SEND_INTERVAL_MS 4000UL
 
 // --- WiFi credentials (à adapter) ---
 const char* ssid = WIFI_SSID;
 const char* password = WIFI_PASS;
 // Endpoint du serveur (modifier si besoin)
-const char* SERVER_HOST = "http://10.14.2.136:8000"; // IP DU PC
+const char* SERVER_HOST = "http://10.227.217.136:8000"; // IP DU PC
 const char* TTN_PATH = "/ttn"; // POST target
 
 unsigned long lastSend = 0;
@@ -307,24 +311,36 @@ String buildJsonFromGroups(const std::vector<Group> &groups) {
 
 // ---------- HTTP POST send ----------
 bool sendHTTPPost(const String &url, const String &payload) {
+  WiFiClient client;
   HTTPClient http;
-  http.begin(url);
-  http.addHeader("Content-Type", "application/json");
-  int httpResponseCode = http.POST(payload);
-  Serial.println("HTTP status : " + String(httpResponseCode));
-  String response = http.getString();
-  Serial.println("Response : " + response);
 
-  bool success = false;
-  if (httpResponseCode >= 200 && httpResponseCode < 300) {
-    success = true;
+  Serial.print("[HTTP] Connecting to ");
+  Serial.println(url);
+
+  if (!http.begin(client, url)) {
+    Serial.println("[HTTP] http.begin failed");
+    return false;
+  }
+
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("Accept", "application/json");
+
+  int httpResponseCode = http.POST(payload);
+
+  Serial.println("HTTP status : " + String(httpResponseCode));
+
+  if (httpResponseCode > 0) {
+    String response = http.getString();
+    Serial.println("Response : " + response);
   } else {
     Serial.printf("[HTTP] POST failed: %s\n",
                   http.errorToString(httpResponseCode).c_str());
   }
+
   http.end();
-  return success;
+  return httpResponseCode >= 200 && httpResponseCode < 300;
 }
+
 
 #if SCAN_MODE == 0
 // Mode WiFi Scan : Envoie les scans complets au serveur
@@ -352,30 +368,52 @@ void sendScanOverHttp(const std::vector<Group> &groups) {
 #elif SCAN_MODE == 1
 // Mode Access Point DB Scan : Met à jour les points d'accès dans la base
 void sendScanOverHttp(const std::vector<Group> &groups) {
-  for (auto &g : groups) {
-    for (auto &it : g.items) {
-      String url = String(SERVER_HOST) + "/update_access_point";
-      StaticJsonDocument<256> doc;
-      doc["bssid"] = it.bssid;
-      doc["rssi"] = it.rssi;
-      doc["channel"] = it.channel;
-      doc["encryption"] = it.enc;
-
-      String payload;
-      serializeJson(doc, payload);
-
-      bool ok = sendHTTPPost(url, payload);
-
-      if (ok) {
-        Serial.printf("[HTTP] Mise à jour réussie pour %s\n", it.bssid.c_str());
-      } else {
-        Serial.printf("[HTTP] Échec de la mise à jour pour %s\n", it.bssid.c_str());
-      }
-      delay(500); // Délai pour éviter de saturer le serveur
+  String url = String(SERVER_HOST) + "/update_access_point";
+  
+  StaticJsonDocument<4096> doc;
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[WIFI] Reconnecting...");
+    WiFi.reconnect();
+    unsigned long t0 = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - t0 < 5000) {
+      delay(200);
     }
   }
+
+  JsonArray bssidArray = doc.createNestedArray("bssid_list");
+  JsonArray rssiArray  = doc.createNestedArray("rssi_list");
+  
+  for (auto &g : groups) {
+    for (auto &it : g.items) {
+      bssidArray.add(it.bssid);
+      rssiArray.add(it.rssi);
+    }
+  }
+  
+  // Sécurité : ne rien envoyer si vide
+  if (bssidArray.size() == 0) {
+    Serial.println("[HTTP] Aucun AP détecté, envoi annulé");
+    return;
+  }
+
+  String payload;
+  serializeJson(doc, payload);
+  
+  Serial.println("[HTTP] Payload à envoyer :");
+  Serial.println(payload);
+  Serial.print("[HTTP] Connecting to ");
+  Serial.println(url);
+
+  bool ok = sendHTTPPost(url, payload);
+
+  if (ok) {
+    Serial.println("[HTTP] Mise à jour access point réussie");
+  } else {
+    Serial.println("[HTTP] Échec mise à jour access point");
+  }
 }
-se
+
+#else
 #error "SCAN_MODE doit être défini à 0 (WiFi Scan) ou 1 (Access Point DB Scan)"
 #endif
 
@@ -448,3 +486,85 @@ void loop() {
 
   delay(200); // petit yield
 }
+
+/*
+Ce code marche :
+#elif SCAN_MODE == 1
+// Mode Access Point DB Scan : Met à jour les points d'accès dans la base
+void sendScanOverHttp(const std::vector<Group> &groups) {
+  String url = String(SERVER_HOST) + "/update_access_point";
+
+  StaticJsonDocument<4096> doc;
+  JsonArray bssidArray = doc.createNestedArray("bssid_list");
+  JsonArray rssiArray  = doc.createNestedArray("rssi_list");
+
+  for (auto &g : groups) {
+    for (auto &it : g.items) {
+      bssidArray.add(it.bssid);
+      rssiArray.add(it.rssi);
+    }
+  }
+
+  // Sécurité : ne rien envoyer si vide
+  if (bssidArray.size() == 0) {
+    Serial.println("[HTTP] Aucun AP détecté, envoi annulé");
+    return;
+  }
+
+  String payload;
+  serializeJson(doc, payload);
+
+  Serial.println("[HTTP] Payload à envoyer :");
+  Serial.println(payload);
+  Serial.print("[HTTP] Connecting to ");
+  Serial.println(url);
+
+  bool ok = sendHTTPPost(url, payload);
+
+  if (ok) {
+    Serial.println("[HTTP] Mise à jour access point réussie");
+  } else {
+    Serial.println("[HTTP] Échec mise à jour access point");
+  }
+}
+
+CELUI CI QUI EST PARFAITEMENT IDENTIQUE D'APRÈS DEUX FOUTUS COMPARATEURS DE TEXTE NE MARCHE PAS :
+#elif SCAN_MODE == 1
+// Mode Access Point DB Scan : Met à jour les points d'accès dans la base
+void sendScanOverHttp(const std::vector<Group> &groups) {
+  String url = String(SERVER_HOST) + "/update_access_point";
+
+  StaticJsonDocument<4096> doc;
+  JsonArray bssidArray = doc.createNestedArray("bssid_list");
+  JsonArray rssiArray  = doc.createNestedArray("rssi_list");
+
+  for (auto &g : groups) {
+    for (auto &it : g.items) {
+      bssidArray.add(it.bssid);
+      rssiArray.add(it.rssi);
+    }
+  }
+
+  // Sécurité : ne rien envoyer si vide
+  if (bssidArray.size() == 0) {
+    Serial.println("[HTTP] Aucun AP détecté, envoi annulé");
+    return;
+  }
+
+  String payload;
+  serializeJson(doc, payload);
+
+  Serial.println("[HTTP] Payload à envoyer :");
+  Serial.println(payload);
+  Serial.print("[HTTP] Connecting to ");
+  Serial.println(url);
+
+  bool ok = sendHTTPPost(url, payload);
+
+  if (ok) {
+    Serial.println("[HTTP] Mise à jour access point réussie");
+  } else {
+    Serial.println("[HTTP] Échec mise à jour access point");
+  }
+}
+*/
